@@ -9,6 +9,7 @@ import streamlit as st
 import plotly.express as px
 from datetime import datetime
 from pathlib import Path
+from typing import Union
 
 BASE_DIR = Path(__file__).parent
 
@@ -18,9 +19,22 @@ BASE_DIR = Path(__file__).parent
 # =========================
 st.set_page_config(page_title="OASA Metro Insight Hub", layout="wide")
 
-FILE_PATH = BASE_DIR / "oasa_ridership_01_2024.xlsx"
 
-SHEET_NAME = "Sheet1"
+MONTH_FILES = {
+    "Ιανουάριος 2024": "oasa_ridership_01_2024.csv",
+    "Φεβρουάριος 2024": "oasa_ridership_02_2024.csv",
+    "Μάρτιος 2024": "oasa_ridership_03_2024.csv",
+    "Απρίλιος 2024": "oasa_ridership_04_2024.csv",
+    "Μάιος 2024": "oasa_ridership_05_2024.csv",
+    "Ιούνιος 2024": "oasa_ridership_06_2024.csv",
+    "Ιούλιος 2024": "oasa_ridership_07_2024.csv",
+    "Αύγουστος 2024": "oasa_ridership_08_2024.csv",
+    "Σεπτέμβριος 2024": "oasa_ridership_09_2024.csv",
+    "Οκτώβριος 2024": "oasa_ridership_10_2024.csv",
+    "Νοέμβριος 2024": "oasa_ridership_11_2024.csv",
+    "Δεκέμβριος 2024": "oasa_ridership_12_2024.csv",
+}
+
 
 # =========================
 # 6-COLOR PALETTE (stable)
@@ -114,44 +128,66 @@ def to_categorical_for_color(df: pd.DataFrame, col: str) -> pd.DataFrame:
         d[col] = d[col].astype(str)
     return d
 
-from pathlib import Path
-from typing import Union
 
 @st.cache_data(show_spinner=False)
 def load_data(path: Union[str, Path]) -> pd.DataFrame:
-    df = pd.read_excel(path, sheet_name=SHEET_NAME)
+    # 1. Διαβάζουμε CSV με αυτόματη ανίχνευση οριοθέτη (/,; κτλ.)
+    df = pd.read_csv(path, sep=None, engine="python")
 
-    df["date_hour"] = pd.to_datetime(df["date_hour"], errors="coerce")
+    # 2. Καθαρίζουμε ονόματα στηλών (κενά + BOM)
+    df.columns = (
+        df.columns
+        .str.strip()
+        .str.replace("\ufeff", "", regex=False)
+    )
+
+    # 3. date_hour -> datetime (dd/mm/YYYY HH:MM)
+    df["date_hour"] = pd.to_datetime(
+        df["date_hour"].astype(str).str.strip(),
+        dayfirst=True,           # γιατί έχεις 20/1/2024 κ.λπ.
+        errors="coerce",
+    )
     df = df.dropna(subset=["date_hour"]).copy()
 
-    df["dv_validations"] = pd.to_numeric(df["dv_validations"], errors="coerce").fillna(0)
+    # 4. dv_validations -> numeric
+    df["dv_validations"] = pd.to_numeric(
+        df["dv_validations"], errors="coerce"
+    ).fillna(0)
 
+    # 5. Παράγωγες στήλες
     df["date"] = df["date_hour"].dt.date
     df["hour"] = df["date_hour"].dt.hour
     df["dow"] = df["date_hour"].dt.day_name()
     df["is_weekend"] = df["date_hour"].dt.weekday >= 5
 
-    # Clean text columns
+    # 6. Καθάρισμα text fields
     for col in ["dv_platenum_station", "dv_agency"]:
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip()
 
     return df
 
-
-# =========================
-# LOAD
-# =========================
-df = load_data(FILE_PATH)
-
-min_dt = df["date_hour"].min()
-max_dt = df["date_hour"].max()
-
 # =========================
 # SIDEBAR FILTERS
 # =========================
 st.sidebar.header("Filters")
 
+# 1) Επιλογή μήνα ΠΡΙΝ φορτώσουμε δεδομένα
+month_label = st.sidebar.selectbox(
+    "Μήνας (2024)",
+    list(MONTH_FILES.keys()),
+    index=0,  # default: Ιανουάριος
+)
+FILE_PATH = BASE_DIR / MONTH_FILES[month_label]
+
+# 2) Φόρτωση δεδομένων του επιλεγμένου μήνα
+df = load_data(FILE_PATH)
+
+min_dt = df["date_hour"].min()
+max_dt = df["date_hour"].max()
+
+
+# 3) Υπόλοιπα φίλτρα sidebar
 stops = sorted(df["dv_platenum_station"].dropna().unique()) if "dv_platenum_station" in df.columns else []
 agencies = sorted(df["dv_agency"].dropna().unique()) if "dv_agency" in df.columns else []
 
@@ -175,6 +211,8 @@ if only_weekend and only_weekdays:
     st.sidebar.warning(
         "Both 'Only weekend' and 'Only weekdays' are selected. No day-type filter will be applied (All days)."
     )
+
+
 
 # =========================
 # CHART COLOR CONTROLS (restricted)
