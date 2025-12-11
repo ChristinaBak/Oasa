@@ -114,9 +114,11 @@ def to_categorical_for_color(df: pd.DataFrame, col: str) -> pd.DataFrame:
         d[col] = d[col].astype(str)
     return d
 
+from pathlib import Path
+from typing import Union
 
 @st.cache_data(show_spinner=False)
-def load_data(path: str) -> pd.DataFrame:
+def load_data(path: Union[str, Path]) -> pd.DataFrame:
     df = pd.read_excel(path, sheet_name=SHEET_NAME)
 
     df["date_hour"] = pd.to_datetime(df["date_hour"], errors="coerce")
