@@ -8,13 +8,18 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 from datetime import datetime
+from pathlib import Path
+
+BASE_DIR = Path(__file__).parent
+
 
 # =========================
 # CONFIG
 # =========================
 st.set_page_config(page_title="OASA Metro Insight Hub", layout="wide")
 
-FILE_PATH = r"C:\Users\ChristinaBakatsi\OneDrive - NAMA AE\oasa_ridership_2024\oasa_ridership_01_2024.xlsx"
+FILE_PATH = BASE_DIR / "oasa_ridership_01_2024.xlsx"
+
 SHEET_NAME = "Sheet1"
 
 # =========================
