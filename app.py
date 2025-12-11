@@ -92,13 +92,13 @@ def apply_dark_plotly(fig, height=None):
         gridcolor="rgba(148,163,184,0.18)",
         zerolinecolor="rgba(148,163,184,0.25)",
         tickfont=dict(color="#cbd5e1"),
-        titlefont=dict(color="#cbd5e1"),
+        title_font=dict(color="#cbd5e1"),
     )
     fig.update_yaxes(
         gridcolor="rgba(148,163,184,0.18)",
         zerolinecolor="rgba(148,163,184,0.25)",
         tickfont=dict(color="#cbd5e1"),
-        titlefont=dict(color="#cbd5e1"),
+        title_font=dict(color="#cbd5e1"),
     )
     if height is not None:
         fig.update_layout(height=height)
