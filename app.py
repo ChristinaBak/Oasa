@@ -164,6 +164,13 @@ def load_data(path: Union[str, Path]) -> pd.DataFrame:
     for col in ["dv_platenum_station", "dv_agency"]:
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip()
+            
+        # --- Φιλτράρουμε λεωφορεία (dv_agency == 1)
+    if "dv_agency" in df.columns:
+        #df = df[df["dv_agency"] != "1"]   # γιατί την κάναμε str πιο πάνω
+        
+        df = df[pd.to_numeric(df["dv_agency"], errors="coerce") != 1]
+
 
     return df
 
