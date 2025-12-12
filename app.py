@@ -269,8 +269,21 @@ def load_data(path: Union[str, Path]) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def load_network_geodata():
-    # Διαβάζουμε shapefiles και τα φέρνουμε σε WGS84 (lon/lat)
-    gdf_lines = gpd.read_file(LINES_SHP).to_crs("EPSG:4326")
+    # 1. Διαβάζουμε τις γραμμές στο αρχικό τους SRS (EPSG:2100, μέτρα)
+    gdf_lines = gpd.read_file(LINES_SHP)
+
+    # Υπολογίζουμε μήκος σε μέτρα στο EPSG:2100
+    gdf_lines["length_m"] = gdf_lines.geometry.length
+
+    # Κρατάμε ΜΟΝΟ πραγματικά τμήματα γραμμής,
+    # πετάμε τα μικρά βελάκια (π.χ. ό,τι είναι < 300 m).
+    # Αν δεις ότι κόβονται και κανονικές γραμμές, χαμήλωσε το όριο.
+    gdf_lines = gdf_lines[gdf_lines["length_m"] > 300]
+
+    # Μετατροπή σε WGS84 για pydeck
+    gdf_lines = gdf_lines.to_crs("EPSG:4326")
+
+    # 2. Διαβάζουμε τα stops και τα φέρνουμε σε WGS84
     gdf_stops = gpd.read_file(STOPS_SHP).to_crs("EPSG:4326")
 
     # Προσθέτουμε συντεταγμένες σημείων
@@ -278,6 +291,9 @@ def load_network_geodata():
     gdf_stops["lat"] = gdf_stops.geometry.y
 
     return gdf_lines, gdf_stops
+
+
+
 
 # =========================
 # SIDEBAR FILTERS
@@ -518,17 +534,18 @@ with left:
         unsafe_allow_html=True,
     )
 
-    # Προετοιμασία layers για pydeck
-    # 1) Γραμμές ως GeoJsonLayer
+
     line_layer = pdk.Layer(
-        "GeoJsonLayer",
-        data=gdf_lines.__geo_interface__,
-        stroked=True,
-        filled=False,
-        get_line_color=[80, 180, 255],
-        get_line_width=3,
-        pickable=False,
-    )
+    "GeoJsonLayer",
+    data=gdf_lines.__geo_interface__,
+    stroked=True,
+    filled=False,
+    get_line_color=[80, 180, 255],
+    get_line_width=3,
+    pickable=False,
+)
+
+
 
     # 2) Σταθμοί ως ScatterplotLayer
     stop_layer = pdk.Layer(
@@ -549,10 +566,11 @@ with left:
     view_state = pdk.ViewState(
         latitude=center_lat,
         longitude=center_lon,
-        zoom=11,
-        pitch=45,
+        zoom=11,   # ή 10–12 αν θέλεις πιο μέσα/έξω
+        pitch=0,   # κάθετη κάτοψη
         bearing=0,
     )
+
 
     deck = pdk.Deck(
        layers=[line_layer, stop_layer],
