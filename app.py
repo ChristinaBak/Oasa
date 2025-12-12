@@ -4,6 +4,8 @@ Created on Tue Dec  9 16:14:10 2025
 
 @author: ChristinaBakatsi
 """
+
+
 import pandas as pd
 import streamlit as st
 import plotly.express as px
@@ -13,12 +15,10 @@ from typing import Union
 
 BASE_DIR = Path(__file__).parent
 
-
 # =========================
 # CONFIG
 # =========================
 st.set_page_config(page_title="OASA Metro Insight Hub", layout="wide")
-
 
 MONTH_FILES = {
     "Ιανουάριος 2024": "oasa_ridership_01_2024.csv",
@@ -34,6 +34,17 @@ MONTH_FILES = {
     "Νοέμβριος 2024": "oasa_ridership_11_2024.csv",
     "Δεκέμβριος 2024": "oasa_ridership_12_2024.csv",
 }
+
+# Περιγραφές για agency codes
+AGENCY_LABELS = {
+    "2": "2 - Metro",
+    "3": "3 - Προαστιακός",
+    "4": "4 - Tram",
+}
+
+def format_agency_option(code: str) -> str:
+    """Εμφανιζόμενο label στο dropdown για dv_agency."""
+    return AGENCY_LABELS.get(str(code), str(code))
 
 
 # =========================
@@ -131,7 +142,7 @@ def to_categorical_for_color(df: pd.DataFrame, col: str) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def load_data(path: Union[str, Path]) -> pd.DataFrame:
-    # 1. Διαβάζουμε CSV με αυτόματη ανίχνευση οριοθέτη (/,; κτλ.)
+    # 1. Διαβάζουμε CSV
     df = pd.read_csv(path, sep=None, engine="python")
 
     # 2. Καθαρίζουμε ονόματα στηλών (κενά + BOM)
@@ -144,7 +155,7 @@ def load_data(path: Union[str, Path]) -> pd.DataFrame:
     # 3. date_hour -> datetime (dd/mm/YYYY HH:MM)
     df["date_hour"] = pd.to_datetime(
         df["date_hour"].astype(str).str.strip(),
-        dayfirst=True,           # γιατί έχεις 20/1/2024 κ.λπ.
+        dayfirst=True,
         errors="coerce",
     )
     df = df.dropna(subset=["date_hour"]).copy()
@@ -154,25 +165,40 @@ def load_data(path: Union[str, Path]) -> pd.DataFrame:
         df["dv_validations"], errors="coerce"
     ).fillna(0)
 
-    # 5. Παράγωγες στήλες
+    # 5. Καθαρίζουμε text πεδία
+    if "dv_platenum_station" in df.columns:
+        df["dv_platenum_station"] = df["dv_platenum_station"].astype(str).str.strip()
+    if "dv_agency" in df.columns:
+        df["dv_agency"] = df["dv_agency"].astype(str).str.strip()
+
+    # 6. Φιλτράρουμε λεωφορεία (dv_agency == 1)
+    if "dv_agency" in df.columns:
+        df = df[pd.to_numeric(df["dv_agency"], errors="coerce") != 1]
+
+    # 7. Διόρθωση διπλοεγγραφών για στάση ΑΤΤΙΚΗ
+    if "dv_platenum_station" in df.columns:
+        # καθαρισμένο όνομα
+        st_clean = df["dv_platenum_station"].astype(str).str.strip()
+
+        # πιάνουμε και 'ΑTTΙKΗ' (μικτό Greek/Latin) και 'ΑΤΤΙΚΗ' (όλα ελληνικά)
+        mask_attiki = st_clean.isin(["ΑTTΙKΗ", "ΑΤΤΙΚΗ"])
+
+        # διαιρούμε τις επικυρώσεις δια 2
+        df.loc[mask_attiki, "dv_validations"] = (
+            df.loc[mask_attiki, "dv_validations"] / 2.0
+        )
+
+        # και ενοποιούμε το όνομα για το groupby
+        df.loc[mask_attiki, "dv_platenum_station"] = "ΑΤΤΙΚΗ"
+
+    # 8. Παράγωγες στήλες
     df["date"] = df["date_hour"].dt.date
     df["hour"] = df["date_hour"].dt.hour
     df["dow"] = df["date_hour"].dt.day_name()
     df["is_weekend"] = df["date_hour"].dt.weekday >= 5
 
-    # 6. Καθάρισμα text fields
-    for col in ["dv_platenum_station", "dv_agency"]:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.strip()
-            
-        # --- Φιλτράρουμε λεωφορεία (dv_agency == 1)
-    if "dv_agency" in df.columns:
-        #df = df[df["dv_agency"] != "1"]   # γιατί την κάναμε str πιο πάνω
-        
-        df = df[pd.to_numeric(df["dv_agency"], errors="coerce") != 1]
-
-
     return df
+
 
 # =========================
 # SIDEBAR FILTERS
@@ -193,20 +219,33 @@ df = load_data(FILE_PATH)
 min_dt = df["date_hour"].min()
 max_dt = df["date_hour"].max()
 
-
 # 3) Υπόλοιπα φίλτρα sidebar
-stops = sorted(df["dv_platenum_station"].dropna().unique()) if "dv_platenum_station" in df.columns else []
-agencies = sorted(df["dv_agency"].dropna().unique()) if "dv_agency" in df.columns else []
+stops = (
+    sorted(df["dv_platenum_station"].dropna().unique())
+    if "dv_platenum_station" in df.columns
+    else []
+)
+agencies = (
+    sorted(df["dv_agency"].dropna().unique())
+    if "dv_agency" in df.columns
+    else []
+)
 
-default_stop = stops[:1] if stops else []
-sel_stops = st.sidebar.multiselect("Stop", stops, default=default_stop)
-sel_agencies = st.sidebar.multiselect("Agency", agencies, default=agencies)
+# Κανένα default: ο χρήστης διαλέγει μόνος του
+sel_stops = st.sidebar.multiselect("Stop", stops, default=[])
+agency_options = [format_agency_option(a) for a in agencies]
+sel_agency_labels = st.sidebar.multiselect("Agency", agency_options, default=[])
+
+# map από label → code
+label_to_code = {format_agency_option(a): str(a) for a in agencies}
+sel_agencies_codes = [label_to_code[l] for l in sel_agency_labels]
 
 date_range = st.sidebar.date_input(
     "Date range",
     value=(min_dt.date(), max_dt.date()),
     min_value=min_dt.date(),
     max_value=max_dt.date(),
+    key="date_range",
 )
 
 hour_range = st.sidebar.slider("Hour range", 0, 23, (0, 23))
@@ -218,8 +257,6 @@ if only_weekend and only_weekdays:
     st.sidebar.warning(
         "Both 'Only weekend' and 'Only weekdays' are selected. No day-type filter will be applied (All days)."
     )
-
-
 
 # =========================
 # CHART COLOR CONTROLS (restricted)
@@ -241,29 +278,32 @@ st.sidebar.selectbox(
 )
 colorby_left_col = "dv_platenum_station"
 
-# Trend line: Stop / Hour / Day of week
+# Trend line: default = Hour
 colorby_ts_label = st.sidebar.selectbox(
     "Trend line: color by",
     options=["Stop", "Hour", "Day of week"],
-    index=2,
+    index=1,  # Hour
 )
 colorby_ts_col = COLOR_CHOICES_COMMON[colorby_ts_label]
 
-# Top 5 bars: Stop / Hour / Day of week
+# Top 5 bars: default = Stop
 colorby_top5_label = st.sidebar.selectbox(
     "Top 5 bars: color by",
     options=["Stop", "Hour", "Day of week"],
-    index=0,
+    index=0,  # Stop
 )
 colorby_top5_col = COLOR_CHOICES_COMMON[colorby_top5_label]
 
-# Avg by hour: Stop / Day of week
+# Avg by hour: default = Stop
 colorby_hourly_label = st.sidebar.selectbox(
     "Avg by hour: color by",
     options=["Stop", "Day of week"],
-    index=1,
+    index=0,  # Stop
 )
-colorby_hourly_col = {"Stop": "dv_platenum_station", "Day of week": "dow"}[colorby_hourly_label]
+colorby_hourly_col = {
+    "Stop": "dv_platenum_station",
+    "Day of week": "dow",
+}[colorby_hourly_label]
 
 # =========================
 # APPLY FILTERS
@@ -272,8 +312,8 @@ f = df.copy()
 
 if sel_stops and "dv_platenum_station" in f.columns:
     f = f[f["dv_platenum_station"].isin(sel_stops)]
-if sel_agencies and "dv_agency" in f.columns:
-    f = f[f["dv_agency"].isin(sel_agencies)]
+if sel_agencies_codes and "dv_agency" in f.columns:
+    f = f[f["dv_agency"].isin(sel_agencies_codes)]
 
 start_date, end_date = date_range
 f = f[(f["date_hour"].dt.date >= start_date) & (f["date_hour"].dt.date <= end_date)]
@@ -324,7 +364,11 @@ st.markdown(
 total_val = int(f["dv_validations"].sum())
 active_hours = int(f["date_hour"].nunique())
 mean_validations_per_hour = (total_val / active_hours) if active_hours else 0
-active_stops = int(f["dv_platenum_station"].nunique()) if "dv_platenum_station" in f.columns else 0
+active_stops = (
+    int(f["dv_platenum_station"].nunique())
+    if "dv_platenum_station" in f.columns
+    else 0
+)
 
 peak_row = (
     f.groupby("date_hour", as_index=False)["dv_validations"].sum()
@@ -333,7 +377,10 @@ peak_row = (
 )
 peak_txt = "—"
 if not peak_row.empty:
-    peak_txt = f'{peak_row.iloc[0]["date_hour"]:%Y-%m-%d %H:00} ({int(peak_row.iloc[0]["dv_validations"]):,})'
+    peak_txt = (
+        f'{peak_row.iloc[0]["date_hour"]:%Y-%m-%d %H:00} '
+        f'({int(peak_row.iloc[0]["dv_validations"]):,})'
+    )
 
 # =========================
 # MAIN LAYOUT
@@ -357,7 +404,12 @@ with left:
         f.groupby("dv_platenum_station", as_index=False)["dv_validations"].sum()
         .sort_values("dv_validations", ascending=False)
         .head(topN_left)
-        .rename(columns={"dv_platenum_station": "Stop", "dv_validations": "Validations"})
+        .rename(
+            columns={
+                "dv_platenum_station": "Stop",
+                "dv_validations": "Validations",
+            }
+        )
     )
 
     top_left = to_categorical_for_color(top_left, "Stop")
@@ -410,7 +462,10 @@ with right:
     # ---- Trend (hourly sum)
     f_ts = to_categorical_for_color(f, colorby_ts_col)
     ts = (
-        f_ts.groupby(["date_hour", colorby_ts_col], as_index=False)["dv_validations"].sum()
+        f_ts.groupby(["date_hour", colorby_ts_col], as_index=False)[
+            "dv_validations"
+        ]
+        .sum()
         .rename(columns={"dv_validations": "Validations"})
     )
 
@@ -437,7 +492,12 @@ with right:
         f.groupby("dv_platenum_station", as_index=False)["dv_validations"].sum()
         .sort_values("dv_validations", ascending=False)
         .head(5)
-        .rename(columns={"dv_platenum_station": "Stop", "dv_validations": "Validations"})
+        .rename(
+            columns={
+                "dv_platenum_station": "Stop",
+                "dv_validations": "Validations",
+            }
+        )
     )
     top5_stops = set(top5_base["Stop"].tolist())
     ff = f[f["dv_platenum_station"].isin(top5_stops)].copy()
@@ -484,14 +544,20 @@ with right:
 # =========================
 # BOTTOM ROW: Avg by hour + Heatmap
 # =========================
-st.markdown('<div class="card"><div class="card-title">Additional Analytics</div></div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="card"><div class="card-title">Additional Analytics</div></div>',
+    unsafe_allow_html=True,
+)
 
 b1, b2 = st.columns([1, 1], gap="large")
 
 with b1:
     fh = to_categorical_for_color(f, colorby_hourly_col)
     hp = (
-        fh.groupby(["hour", colorby_hourly_col], as_index=False)["dv_validations"].mean()
+        fh.groupby(["hour", colorby_hourly_col], as_index=False)[
+            "dv_validations"
+        ]
+        .mean()
         .rename(columns={"dv_validations": "Mean validations"})
     )
 
@@ -545,8 +611,6 @@ with b2:
 # =========================
 exp1, exp2 = st.columns([1, 1], gap="large")
 
-
-
 with exp2:
     all_days = pd.date_range(min_dt.date(), max_dt.date(), freq="D").date
     present_days = set(df["date_hour"].dt.date.unique())
@@ -573,7 +637,6 @@ with exp2:
             """,
             unsafe_allow_html=True,
         )
-
 
 
 
