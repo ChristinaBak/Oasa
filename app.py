@@ -12,8 +12,14 @@ import plotly.express as px
 from datetime import datetime
 from pathlib import Path
 from typing import Union
+import geopandas as gpd
+import pydeck as pdk
+
 
 BASE_DIR = Path(__file__).parent
+LINES_SHP = BASE_DIR / "data" / "Splitted_Metro_Lines_2100.shp"
+STOPS_SHP = BASE_DIR / "data" / "PT_Stops_2100.shp"
+
 
 # =========================
 # CONFIG
@@ -46,6 +52,58 @@ def format_agency_option(code: str) -> str:
     """Εμφανιζόμενο label στο dropdown για dv_agency."""
     return AGENCY_LABELS.get(str(code), str(code))
 
+# Ποιό είναι το πεδίο ονόματος στο shapefile:
+STATION_NAME_COL = "stop_descr"  # ή ό,τι έχεις στο shapefile
+
+# Χειροκίνητες αντιστοιχίσεις ονομάτων shapefile -> "κανονικό" όνομα (από ridership)
+# ΒΑΛΕ εδώ τα δικά σου 6 ζευγάρια
+STATION_NAME_MAP = {
+    # παράδειγμα:
+    "ΑΓΙΟΣ ΕΛΕΥΘΕΡΙΟ": "ΑΓΙΟΣ ΕΛΕΥΘΕΡΙΟΣ",
+    "ΣΥΓΓΡΟΥ-ΦΙΞ": "ΣΥΓΓΡΟΥ ΦΙΞ",
+    "ΚΑΤ": "KΑT",
+    "ΚΑΤΕΧΑΚΗ": "KΑTΕΧΑKΗ",
+    "ΚΑΤΩ ΠΑΤΗΣΙΑ": "KΑTΩ ΠΑTΗΣΙΑ",
+    "ΚΑΛΛΙΘΕΑ": "KΑΛΛΙΘΕΑ",
+    "ΚΕΡΑΜΕΙΚΟΣ": "KΕΡΑΜΕΙKOΣ",
+    "ΚΗΦΙΣΙΑ": "KΗΦΙΣΙΑ",
+    "ΚΟΡΩΠΙ": "KΟΡΩΠΙ",
+    "ΤΑΥΡΟΣ": "TΑΥΡΟΣ",
+    "ΑΓΙΑ ΠΑΡΑΣΚΕΥΗ": "ΑΓΙΑ ΠΑΡΑΣKΕΥΗ",
+    "ΑΓΙΟΣ ΑΝΤΩΝΙΟΣ": "ΑΓΙΟΣ ΑΝTΩΝΙΟΣ",
+    "ΑΓΙΟΣ ΔΗΜΗΤΡΙΟΣ": "ΑΓΙΟΣ ΔΗΜΗTΡΙΟΣ",
+    "ΑΓΙΟΣ ΝΙΚΟΛΑΟΣ": "ΑΓΙΟΣ ΝΙKOΛΑΟΣ",
+    "ΑΚΡΟΠΟΛΗ": "ΑKΡOΠΟΛΗ",
+    "ΑΜΠΕΛΟΚΗΠΟΙ": "ΑΜΠΕΛOKΗΠΟΙ",
+    "ΑΝΩ ΠΑΤΗΣΙΑ": "ΑΝΩ ΠΑTΗΣΙΑ",
+    "ΒΙΚΤΩΡΙΑ": "ΒΙKTΩΡΙΑ",
+    "ΕΘΝΙΚΗ ΑΜΥΝΑ": "ΕΘΝΙKΗ ΑΜΥΝΑ",
+    "ΕΛΛΗΝΙΚΟ": "ΕΛΛΗΝΙKO",
+    "ΗΡΑΚΛΕΙΟ": "ΗΡΑKΛΕΙΟ",
+    "ΜΕΤΑΞΟΥΡΓΕΙΟ": "ΜΕTΑΞΟΥΡΓΕΙΟ",
+    "ΜΕΓΑΡΟ ΜΟΥΣΙΚΗΣ": "ΜΕΓΑΡΟ ΜΟΥΣΙKΗΣ",
+    "ΜΟΝΑΣΤΗΡΑΚΙ": "ΜΟΝΑΣTΗΡΑKΙ",
+    "ΜΟΣΧΑΤΟ": "ΜΟΣΧΑTΟ",
+    "ΝΕΟΣ ΚΟΣΜΟΣ": "ΝΕΟΣ KOΣΜΟΣ",
+    "ΝΕΡΑΝΤΖΙΩΤΙΣΣΑ": "ΝΕΡΑTΖΙΩTΙΣΣΑ",
+    "ΝΟΜΙΣΜΑΤΟΚΟΠΕΙΟ": "ΝΟΜΙΣΜΑTΟKΟΠΕΙΟ",
+    "ΟΜΟΝΟΙΑ": "ΟΜOΝΟΙΑ",
+    "ΠΑΙΑΝΙΑ-ΚΑΝΤΖΑ": "ΠΑΙΑΝΙΑ - KΑΝTΖΑ",
+    "ΠΑΝΟΡΜΟΥ": "ΠΑΝOΡΜΟΥ",
+    "ΠΑΝΕΠΙΣΤΗΜΙΟ": "ΠΑΝΕΠΙΣTΗΜΙΟ",
+    "ΠΕΤΡΑΛΩΝΑ": "ΠΕTΡΑΛΩΝΑ",
+    "ΠΕΡΙΣΣΟΣ": "ΠΕΡΙΣΣOΣ",
+    "ΠΕΡΙΣΤΕΡΙ": "ΠΕΡΙΣTΕΡΙ",
+    "ΠΕΥΚΑΚΙΑ": "ΠΕΥKΑKΙΑ",
+    "ΣΤ.ΛΑΡΙΣΗΣ": "ΣTΑΘΜOΣ ΛΑΡΙΣΗΣ",
+    "ΣΕΠΟΛΙΑ": "ΣΕΠOΛΙΑ",
+    "ΣΥΝΤΑΓΜΑ": "ΣΥΝTΑΓΜΑ",
+    "ΧΟΛΑΡΓΟΣ": "ΧΟΛΑΡΓOΣ",
+    "ΔΟΥΚ.ΠΛΑΚΕΝΤΙΑΣ": "ΔΟΥKΙΣΣΗΣ ΠΛΑKΕΝTΙΑΣ",
+    "ΕΥΑΓΓΕΛΙΣΜΟΣ": "ΕΥΑΓΓΕΛΙΣΜOΣ"
+    
+    
+}
 
 # =========================
 # 6-COLOR PALETTE (stable)
@@ -139,6 +197,16 @@ def to_categorical_for_color(df: pd.DataFrame, col: str) -> pd.DataFrame:
         d[col] = d[col].astype(str)
     return d
 
+def normalize_station_name(s: pd.Series) -> pd.Series:
+    """Κανονικοποίηση ονόματος σταθμού για join μεταξύ ridership & shapefile."""
+    # string, strip, uppercase
+    s_norm = s.astype(str).str.strip().str.upper()
+
+    # εφαρμογή χειροκίνητου mapping στο shapefile
+    s_norm = s_norm.replace(STATION_NAME_MAP)
+
+    return s_norm
+
 
 @st.cache_data(show_spinner=False)
 def load_data(path: Union[str, Path]) -> pd.DataFrame:
@@ -199,6 +267,17 @@ def load_data(path: Union[str, Path]) -> pd.DataFrame:
 
     return df
 
+@st.cache_data(show_spinner=False)
+def load_network_geodata():
+    # Διαβάζουμε shapefiles και τα φέρνουμε σε WGS84 (lon/lat)
+    gdf_lines = gpd.read_file(LINES_SHP).to_crs("EPSG:4326")
+    gdf_stops = gpd.read_file(STOPS_SHP).to_crs("EPSG:4326")
+
+    # Προσθέτουμε συντεταγμένες σημείων
+    gdf_stops["lon"] = gdf_stops.geometry.x
+    gdf_stops["lat"] = gdf_stops.geometry.y
+
+    return gdf_lines, gdf_stops
 
 # =========================
 # SIDEBAR FILTERS
@@ -387,17 +466,111 @@ if not peak_row.empty:
 # =========================
 left, right = st.columns([2.25, 1.0], gap="large")
 
+gdf_lines, gdf_stops = load_network_geodata()
+
+# Σύνολο validations ανά στάση, βάση των τρεχόντων φίλτρων
+# Σύνολο validations ανά στάση, βάση των τρεχόντων φίλτρων
+agg = (
+    f.groupby("dv_platenum_station", as_index=False)["dv_validations"]
+    .sum()
+    .rename(columns={"dv_validations": "Validations"})
+)
+
+# --- Κανονικοποίηση ονομάτων στις δύο πλευρές ---
+
+# Ridership: μόνο upper/strip
+agg["name_norm"] = agg["dv_platenum_station"].astype(str).str.strip().str.upper()
+
+# Shapefile: upper/strip + STATION_NAME_MAP
+gdf_stops["name_norm"] = normalize_station_name(gdf_stops[STATION_NAME_COL])
+
+# Merge με βάση name_norm
+gdf_stops_agg = gdf_stops.merge(
+    agg[["name_norm", "Validations"]],
+    on="name_norm",
+    how="left",
+)
+
+gdf_stops_agg["Validations"] = gdf_stops_agg["Validations"].fillna(0)
+
+# (lon/lat τα έχει ήδη από load_network_geodata)
+max_val = gdf_stops_agg["Validations"].max()
+if max_val > 0:
+    gdf_stops_agg["radius"] = 80 + 420 * gdf_stops_agg["Validations"] / max_val
+else:
+    gdf_stops_agg["radius"] = 80
+
+
+
 # -------- LEFT: "Network view" placeholder + Top stops
+# -------- LEFT: "Network view" χάρτης + Top stops
 with left:
     st.markdown(
         """
         <div class="card">
             <div class="card-title">Network View</div>
-            <div class="small-muted">Currently shown as a ranked panel. We can replace this with a GIS map / schematic once geometry/topology is provided.</div>
+            <div class="small-muted">
+                Spatial view of the metro / ISAP network. Circle size encodes total validations
+                for the current filters.
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+    # Προετοιμασία layers για pydeck
+    # 1) Γραμμές ως GeoJsonLayer
+    line_layer = pdk.Layer(
+        "GeoJsonLayer",
+        data=gdf_lines.__geo_interface__,
+        stroked=True,
+        filled=False,
+        get_line_color=[80, 180, 255],
+        get_line_width=3,
+        pickable=False,
+    )
+
+    # 2) Σταθμοί ως ScatterplotLayer
+    stop_layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=gdf_stops_agg,
+        get_position=["lon", "lat"],
+        get_radius="radius",
+        radius_min_pixels=2,
+        radius_max_pixels=40,
+        get_fill_color=[255, 140, 0, 160],
+        pickable=True,
+    )
+
+    # Κέντρο χάρτη ~ μέσος των σταθμών
+    center_lat = float(gdf_stops_agg["lat"].mean())
+    center_lon = float(gdf_stops_agg["lon"].mean())
+
+    view_state = pdk.ViewState(
+        latitude=center_lat,
+        longitude=center_lon,
+        zoom=11,
+        pitch=45,
+        bearing=0,
+    )
+
+    deck = pdk.Deck(
+       layers=[line_layer, stop_layer],
+       initial_view_state=view_state,
+       map_style=None,
+       tooltip={
+         "text": f"{{{STATION_NAME_COL}}}\nValidations: {{Validations}}"
+       },
+    )
+
+
+    st.markdown('<div class="card plot-card">', unsafe_allow_html=True)
+    st.pydeck_chart(deck)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Ακολουθεί όπως πριν το Top 12 Stops (το bar chart που ήδη έχεις)
+    # ...
+
 
     topN_left = 12
     top_left = (
