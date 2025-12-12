@@ -3,3 +3,8 @@ pandas
 numpy
 plotly
 openpyxl
+geopandas
+pydeck
+shapely
+pyproj
+pyogrio
