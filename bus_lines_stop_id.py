@@ -860,7 +860,6 @@ with right:
     st.plotly_chart(fig_ts, use_container_width=True, theme=None)
     st.markdown("</div>", unsafe_allow_html=True)
 
-Debug
 # =========================
 # BOTTOM ROW: AVG BY HOUR + HEATMAP
 # =========================
