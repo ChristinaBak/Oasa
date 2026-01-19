@@ -1,0 +1,1008 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Jan  7 14:10:59 2026
+
+@author: ChristinaBakatsi
+"""
+
+import pandas as pd
+import streamlit as st
+import plotly.express as px
+from datetime import datetime
+from pathlib import Path
+from typing import Union
+import geopandas as gpd
+import pydeck as pdk
+import re
+import unicodedata
+
+LINK_FLOW_MONTHS = {
+    "Ιανουάριος 2024",
+    "Απρίλιος 2024",
+    "Αύγουστος 2024",
+    "Οκτώβριος 2024",
+    "Δεκέμβριος 2024",
+}
+
+BASE_DIR = Path(__file__).parent
+LINES_SHP = BASE_DIR / "data" / "PT_Lines_Urban_FixedRoute.shp"
+STOPS_SHP = BASE_DIR / "data" / "PT_Stops_2100.shp"
+
+LINK_FLOW_FILES = {
+    "Απρίλιος 2024": BASE_DIR / "data" / "LINK_FLOWS_EASTER.xlsx",
+    "Ιανουάριος 2024": BASE_DIR / "data" / "LINK_FLOWS_typical_01.xlsx",
+    "Αύγουστος 2024": BASE_DIR / "data" / "LINK_FLOWS_SUMMER.xlsx",
+    "Οκτώβριος 2024": BASE_DIR / "data" / "LINK_FLOWS_typical_10.xlsx",
+    "Δεκέμβριος 2024": BASE_DIR / "data" / "LINK_FLOWS_XMAS.xlsx",
+} 
+
+
+# =========================
+# CONFIG
+# =========================
+st.set_page_config(page_title="OASA Metro Insight Hub", layout="wide")
+
+MONTH_FILES = {
+    "Ιανουάριος 2024": "oasa_ridership_01_2024.csv",
+    "Φεβρουάριος 2024": "oasa_ridership_02_2024.csv",
+    "Μάρτιος 2024": "oasa_ridership_03_2024.csv",
+    "Απρίλιος 2024": "oasa_ridership_04_2024.csv",
+    "Μάιος 2024": "oasa_ridership_05_2024.csv",
+    "Ιούνιος 2024": "oasa_ridership_06_2024.csv",
+    "Ιούλιος 2024": "oasa_ridership_07_2024.csv",
+    "Αύγουστος 2024": "oasa_ridership_08_2024.csv",
+    "Σεπτέμβριος 2024": "oasa_ridership_09_2024.csv",
+    "Οκτώβριος 2024": "oasa_ridership_10_2024.csv",
+    "Νοέμβριος 2024": "oasa_ridership_11_2024.csv",
+    "Δεκέμβριος 2024": "oasa_ridership_12_2024.csv",
+}
+
+# Περιγραφές για agency codes
+AGENCY_LABELS = {
+    "2": "2 - Metro",
+    "3": "3 - Προαστιακός",
+    "4": "4 - Tram",
+}
+
+def format_agency_option(code: str) -> str:
+    """Εμφανιζόμενο label στο dropdown για dv_agency."""
+    return AGENCY_LABELS.get(str(code), str(code))
+
+# Ποιό είναι το πεδίο ονόματος στο shapefile:
+STATION_NAME_COL = "stop_descr"  # ή ό,τι έχεις στο shapefile
+
+# Χειροκίνητες αντιστοιχίσεις ονομάτων shapefile -> "κανονικό" όνομα (από ridership)
+# ΒΑΛΕ εδώ τα δικά σου 6 ζευγάρια
+STATION_NAME_MAP = {
+    # παράδειγμα:
+    "ΑΓΙΟΣ ΕΛΕΥΘΕΡΙΟ": "ΑΓΙΟΣ ΕΛΕΥΘΕΡΙΟΣ",
+    "ΣΥΓΓΡΟΥ-ΦΙΞ": "ΣΥΓΓΡΟΥ ΦΙΞ",
+    "ΚΑΤ": "KΑT",
+    "ΚΑΤΕΧΑΚΗ": "KΑTΕΧΑKΗ",
+    "ΚΑΤΩ ΠΑΤΗΣΙΑ": "KΑTΩ ΠΑTΗΣΙΑ",
+    "ΚΑΛΛΙΘΕΑ": "KΑΛΛΙΘΕΑ",
+    "ΚΕΡΑΜΕΙΚΟΣ": "KΕΡΑΜΕΙKOΣ",
+    "ΚΗΦΙΣΙΑ": "KΗΦΙΣΙΑ",
+    "ΚΟΡΩΠΙ": "KΟΡΩΠΙ",
+    "ΤΑΥΡΟΣ": "TΑΥΡΟΣ",
+    "ΑΓΙΑ ΠΑΡΑΣΚΕΥΗ": "ΑΓΙΑ ΠΑΡΑΣKΕΥΗ",
+    "ΑΓΙΟΣ ΑΝΤΩΝΙΟΣ": "ΑΓΙΟΣ ΑΝTΩΝΙΟΣ",
+    "ΑΓΙΟΣ ΔΗΜΗΤΡΙΟΣ": "ΑΓΙΟΣ ΔΗΜΗTΡΙΟΣ",
+    "ΑΓΙΟΣ ΝΙΚΟΛΑΟΣ": "ΑΓΙΟΣ ΝΙKOΛΑΟΣ",
+    "ΑΚΡΟΠΟΛΗ": "ΑKΡOΠΟΛΗ",
+    "ΑΜΠΕΛΟΚΗΠΟΙ": "ΑΜΠΕΛOKΗΠΟΙ",
+    "ΑΝΩ ΠΑΤΗΣΙΑ": "ΑΝΩ ΠΑTΗΣΙΑ",
+    "ΒΙΚΤΩΡΙΑ": "ΒΙKTΩΡΙΑ",
+    "ΕΘΝΙΚΗ ΑΜΥΝΑ": "ΕΘΝΙKΗ ΑΜΥΝΑ",
+    "ΕΛΛΗΝΙΚΟ": "ΕΛΛΗΝΙKO",
+    "ΗΡΑΚΛΕΙΟ": "ΗΡΑKΛΕΙΟ",
+    "ΜΕΤΑΞΟΥΡΓΕΙΟ": "ΜΕTΑΞΟΥΡΓΕΙΟ",
+    "ΜΕΓΑΡΟ ΜΟΥΣΙΚΗΣ": "ΜΕΓΑΡΟ ΜΟΥΣΙKΗΣ",
+    "ΜΟΝΑΣΤΗΡΑΚΙ": "ΜΟΝΑΣTΗΡΑKΙ",
+    "ΜΟΣΧΑΤΟ": "ΜΟΣΧΑTΟ",
+    "ΝΕΟΣ ΚΟΣΜΟΣ": "ΝΕΟΣ KOΣΜΟΣ",
+    "ΝΕΡΑΝΤΖΙΩΤΙΣΣΑ": "ΝΕΡΑTΖΙΩTΙΣΣΑ",
+    "ΝΟΜΙΣΜΑΤΟΚΟΠΕΙΟ": "ΝΟΜΙΣΜΑTΟKΟΠΕΙΟ",
+    "ΟΜΟΝΟΙΑ": "ΟΜOΝΟΙΑ",
+    "ΠΑΙΑΝΙΑ-ΚΑΝΤΖΑ": "ΠΑΙΑΝΙΑ - KΑΝTΖΑ",
+    "ΠΑΝΟΡΜΟΥ": "ΠΑΝOΡΜΟΥ",
+    "ΠΑΝΕΠΙΣΤΗΜΙΟ": "ΠΑΝΕΠΙΣTΗΜΙΟ",
+    "ΠΕΤΡΑΛΩΝΑ": "ΠΕTΡΑΛΩΝΑ",
+    "ΠΕΡΙΣΣΟΣ": "ΠΕΡΙΣΣOΣ",
+    "ΠΕΡΙΣΤΕΡΙ": "ΠΕΡΙΣTΕΡΙ",
+    "ΠΕΥΚΑΚΙΑ": "ΠΕΥKΑKΙΑ",
+    "ΣΤ.ΛΑΡΙΣΗΣ": "ΣTΑΘΜOΣ ΛΑΡΙΣΗΣ",
+    "ΣΕΠΟΛΙΑ": "ΣΕΠOΛΙΑ",
+    "ΣΥΝΤΑΓΜΑ": "ΣΥΝTΑΓΜΑ",
+    "ΧΟΛΑΡΓΟΣ": "ΧΟΛΑΡΓOΣ",
+    "ΔΟΥΚ.ΠΛΑΚΕΝΤΙΑΣ": "ΔΟΥKΙΣΣΗΣ ΠΛΑKΕΝTΙΑΣ",
+    "ΕΥΑΓΓΕΛΙΣΜΟΣ": "ΕΥΑΓΓΕΛΙΣΜOΣ"
+    
+    
+}
+
+# =========================
+# 6-COLOR PALETTE (stable)
+# =========================
+PALETTE6 = [
+    "#3b82f6",  # blue
+    "#ef4444",  # red
+    "#f59e0b",  # amber
+    "#22c55e",  # green
+    "#a855f7",  # purple
+    "#06b6d4",  # cyan
+]
+
+# =========================
+# DARK UI (CSS)
+# =========================
+st.markdown(
+    """
+<style>
+.stApp { background: #0b1220; color: #e5e7eb; }
+.block-container { padding-top: 0.7rem; }
+
+section[data-testid="stSidebar"]{
+    background: #0f172a;
+    border-right: 1px solid #1f2937;
+}
+section[data-testid="stSidebar"] * { color: #e5e7eb; }
+
+.card {
+    background: #0f172a;
+    border: 1px solid #1f2937;
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+}
+.card-title {
+    font-weight: 800;
+    font-size: 14px;
+    color: #e5e7eb;
+    margin-bottom: 6px;
+}
+.small-muted { color:#9ca3af; font-size: 12px; }
+.status-green { color:#22c55e; font-weight: 800; }
+
+.big-number { font-size: 30px; font-weight: 900; line-height: 1.0; color:#e5e7eb; }
+.metric-label { color:#9ca3af; font-size: 12px; }
+
+.plot-card { padding-top: 10px; }
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+# =========================
+# HELPERS
+# =========================
+
+def strip_accents(text: str) -> str:
+    text = str(text)
+    return "".join(
+        c for c in unicodedata.normalize("NFD", text)
+        if unicodedata.category(c) != "Mn"
+    )
+
+def normalize_name_one(x: str) -> str:
+    s = str(x).strip().upper()
+    s = strip_accents(s)
+    s = re.sub(r"\s+", " ", s)
+    # εφαρμογή mapping που ήδη έχεις
+    s = STATION_NAME_MAP.get(s, s)
+    return s
+
+def normalize_station_name(s: pd.Series) -> pd.Series:
+    return s.astype(str).apply(normalize_name_one)
+
+def normalize_flow_station(x: str) -> str:
+    # κόβουμε suffix τύπου _L1, _L2, ...
+    base = re.sub(r"_L\d+$", "", str(x).strip(), flags=re.IGNORECASE)
+    return normalize_name_one(base)
+
+
+def apply_dark_plotly(fig, height=None):
+    """Force plotly into real dark mode (transparent backgrounds for cards)."""
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#e5e7eb"),
+        margin=dict(l=10, r=10, t=45, b=10),
+        title_font=dict(size=14),
+        legend=dict(bgcolor="rgba(0,0,0,0)"),
+    )
+    fig.update_xaxes(
+        gridcolor="rgba(148,163,184,0.18)",
+        zerolinecolor="rgba(148,163,184,0.25)",
+        tickfont=dict(color="#cbd5e1"),
+        title_font=dict(color="#cbd5e1"),
+    )
+    fig.update_yaxes(
+        gridcolor="rgba(148,163,184,0.18)",
+        zerolinecolor="rgba(148,163,184,0.25)",
+        tickfont=dict(color="#cbd5e1"),
+        title_font=dict(color="#cbd5e1"),
+    )
+    if height is not None:
+        fig.update_layout(height=height)
+    return fig
+
+
+def to_categorical_for_color(df: pd.DataFrame, col: str) -> pd.DataFrame:
+    """Convert numeric/bool columns to string so Plotly uses discrete palette cleanly."""
+    if col is None or col not in df.columns:
+        return df
+    d = df.copy()
+    if pd.api.types.is_bool_dtype(d[col]) or pd.api.types.is_numeric_dtype(d[col]):
+        d[col] = d[col].astype(str)
+    return d
+
+def normalize_station_name(s: pd.Series) -> pd.Series:
+    """Κανονικοποίηση ονόματος σταθμού για join μεταξύ ridership & shapefile."""
+    # string, strip, uppercase
+    s_norm = s.astype(str).str.strip().str.upper()
+
+    # εφαρμογή χειροκίνητου mapping στο shapefile
+    s_norm = s_norm.replace(STATION_NAME_MAP)
+
+    return s_norm
+
+
+@st.cache_data(show_spinner=False)
+def load_data(path: Union[str, Path]) -> pd.DataFrame:
+    # 1. Διαβάζουμε CSV
+    df = pd.read_csv(path, sep=None, engine="python")
+
+    # 2. Καθαρίζουμε ονόματα στηλών (κενά + BOM)
+    df.columns = (
+        df.columns
+        .str.strip()
+        .str.replace("\ufeff", "", regex=False)
+    )
+
+    # 3. date_hour -> datetime (dd/mm/YYYY HH:MM)
+    df["date_hour"] = pd.to_datetime(
+        df["date_hour"].astype(str).str.strip(),
+        dayfirst=True,
+        errors="coerce",
+    )
+    df = df.dropna(subset=["date_hour"]).copy()
+
+    # 4. dv_validations -> numeric
+    df["dv_validations"] = pd.to_numeric(
+        df["dv_validations"], errors="coerce"
+    ).fillna(0)
+
+    # 5. Καθαρίζουμε text πεδία
+    if "dv_platenum_station" in df.columns:
+        df["dv_platenum_station"] = df["dv_platenum_station"].astype(str).str.strip()
+    if "dv_agency" in df.columns:
+        df["dv_agency"] = df["dv_agency"].astype(str).str.strip()
+
+    # 6. Φιλτράρουμε λεωφορεία (dv_agency == 1)
+    if "dv_agency" in df.columns:
+        df = df[pd.to_numeric(df["dv_agency"], errors="coerce") != 1]
+
+    # 7. Διόρθωση διπλοεγγραφών για στάση ΑΤΤΙΚΗ
+    if "dv_platenum_station" in df.columns:
+        # καθαρισμένο όνομα
+        st_clean = df["dv_platenum_station"].astype(str).str.strip()
+
+        # πιάνουμε και 'ΑTTΙKΗ' (μικτό Greek/Latin) και 'ΑΤΤΙΚΗ' (όλα ελληνικά)
+        mask_attiki = st_clean.isin(["ΑTTΙKΗ", "ΑΤΤΙΚΗ"])
+
+        # διαιρούμε τις επικυρώσεις δια 2
+        df.loc[mask_attiki, "dv_validations"] = (
+            df.loc[mask_attiki, "dv_validations"] / 2.0
+        )
+
+        # και ενοποιούμε το όνομα για το groupby
+        df.loc[mask_attiki, "dv_platenum_station"] = "ΑΤΤΙΚΗ"
+
+    # 8. Παράγωγες στήλες
+    df["date"] = df["date_hour"].dt.date
+    df["hour"] = df["date_hour"].dt.hour
+    df["dow"] = df["date_hour"].dt.day_name()
+    df["is_weekend"] = df["date_hour"].dt.weekday >= 5
+
+    return df
+
+@st.cache_data(show_spinner=False)
+def load_network_geodata():
+    # 1. Διαβάζουμε τις γραμμές στο αρχικό τους SRS (EPSG:2100, μέτρα)
+    gdf_lines = gpd.read_file(LINES_SHP)
+
+
+    # Αν το shapefile έχει δηλωμένο CRS, το φέρνουμε σε WGS84.
+    # ΔΕΝ βάζουμε πλέον αυθαίρετα EPSG:2100.
+    if gdf_lines.crs is not None and gdf_lines.crs.to_epsg() != 4326:
+        gdf_lines = gdf_lines.to_crs("EPSG:4326")
+
+    # Αν δεν έχει CRS (crs=None), θεωρούμε ότι είναι ήδη σε WGS84
+    # και δεν το πειράζουμε (αλλιώς θα το χαλάσουμε).
+
+    # ----- STOPS -----
+    gdf_stops = gpd.read_file(STOPS_SHP)
+    if gdf_stops.crs is not None and gdf_stops.crs.to_epsg() != 4326:
+        gdf_stops = gdf_stops.to_crs("EPSG:4326")
+
+    gdf_stops["lon"] = gdf_stops.geometry.x
+    gdf_stops["lat"] = gdf_stops.geometry.y
+
+    return gdf_lines, gdf_stops
+
+@st.cache_data(show_spinner=False)
+def load_link_flows_excel(xlsx_path: Union[str, Path]) -> pd.DataFrame:
+    xls = pd.ExcelFile(xlsx_path)
+    frames = []
+    for sh in xls.sheet_names:
+        tmp = pd.read_excel(xlsx_path, sheet_name=sh)
+        tmp.columns = tmp.columns.astype(str).str.strip()
+        tmp["sheet"] = sh
+        # ασφάλεια τύπων
+        for c in ["flow_forward", "flow_reverse"]:
+            if c in tmp.columns:
+                tmp[c] = pd.to_numeric(tmp[c], errors="coerce").fillna(0)
+        frames.append(tmp)
+    return pd.concat(frames, ignore_index=True)
+
+def offset_path(lon1, lat1, lon2, lat2, offset_m: float) -> list:
+    """
+    Δίνει path 2 σημείων με μικρό κάθετο offset (σε μέτρα) για να φαίνονται 2 κατευθύνσεις.
+    Προσεγγιστικά (αρκετό για Αθήνα).
+    """
+    import math
+
+    lat0 = (lat1 + lat2) / 2.0
+    m_per_deg_lat = 111320.0
+    m_per_deg_lon = 111320.0 * math.cos(math.radians(lat0))
+
+    # σε "μέτρα"
+    x1, y1 = lon1 * m_per_deg_lon, lat1 * m_per_deg_lat
+    x2, y2 = lon2 * m_per_deg_lon, lat2 * m_per_deg_lat
+    vx, vy = (x2 - x1), (y2 - y1)
+    norm = (vx * vx + vy * vy) ** 0.5
+    if norm == 0:
+        return [[lon1, lat1], [lon2, lat2]]
+
+    # κάθετο unit vector
+    nx, ny = (-vy / norm), (vx / norm)
+
+    # offset σε degrees
+    dlon = (nx * offset_m) / m_per_deg_lon
+    dlat = (ny * offset_m) / m_per_deg_lat
+
+    return [[lon1 + dlon, lat1 + dlat], [lon2 + dlon, lat2 + dlat]]
+
+def build_flow_records(df_flow: pd.DataFrame, gdf_stops: gpd.GeoDataFrame, offset_m: float = 25.0):
+    # lookup από name_norm -> (lon,lat)
+    lookup = {}
+    for _, r in gdf_stops.iterrows():
+        lookup[str(r["name_norm"])] = (float(r["lon"]), float(r["lat"]))
+
+    max_flow = float(
+        max(
+            df_flow["flow_forward"].max() if "flow_forward" in df_flow.columns else 0,
+            df_flow["flow_reverse"].max() if "flow_reverse" in df_flow.columns else 0,
+        )
+    ) or 1.0
+
+    records = []
+    missing = set()
+
+    for _, row in df_flow.iterrows():
+        fr_raw = row.get("from", "")
+        to_raw = row.get("to", "")
+
+        fr_norm = normalize_flow_station(fr_raw)
+        to_norm = normalize_flow_station(to_raw)
+
+        if fr_norm not in lookup or to_norm not in lookup:
+            missing.add((str(fr_raw), str(to_raw)))
+            continue
+
+        lon1, lat1 = lookup[fr_norm]
+        lon2, lat2 = lookup[to_norm]
+
+        flow_f = float(row.get("flow_forward", 0))
+        flow_r = float(row.get("flow_reverse", 0))
+
+        # widths (2..12 περίπου)
+        w_f = 2 + 10 * (flow_f / max_flow)
+        w_r = 2 + 10 * (flow_r / max_flow)
+
+        # forward (A->B) με +offset
+        records.append({
+            "line": int(row.get("line", 0)) if str(row.get("line", "")).isdigit() else str(row.get("sheet", "")),
+            "from": re.sub(r"_L\d+$", "", str(fr_raw)),
+            "to": re.sub(r"_L\d+$", "", str(to_raw)),
+            "direction": "forward",
+            "flow": flow_f,
+            "width": w_f,
+            "color": [255, 90, 90, 190],  # κόκκινο
+            "path": offset_path(lon1, lat1, lon2, lat2, +offset_m),
+        })
+
+        # reverse (B->A) με -offset (ώστε να φαίνεται δίπλα)
+        records.append({
+            "line": int(row.get("line", 0)) if str(row.get("line", "")).isdigit() else str(row.get("sheet", "")),
+            "from": re.sub(r"_L\d+$", "", str(to_raw)),
+            "to": re.sub(r"_L\d+$", "", str(fr_raw)),
+            "direction": "reverse",
+            "flow": flow_r,
+            "width": w_r,
+            "color": [90, 255, 90, 190],   # πράσινο
+            "path": offset_path(lon2, lat2, lon1, lat1, -offset_m),
+        })
+
+    return records, missing
+
+
+
+# =========================
+# SIDEBAR FILTERS
+# =========================
+st.sidebar.header("Filters")
+
+# 1) Επιλογή μήνα ΠΡΙΝ φορτώσουμε δεδομένα
+month_label = st.sidebar.selectbox(
+    "Μήνας (2024)",
+    list(MONTH_FILES.keys()),
+    index=0,  # default: Ιανουάριος
+)
+FILE_PATH = BASE_DIR / MONTH_FILES[month_label]
+
+# 2) Φόρτωση δεδομένων του επιλεγμένου μήνα
+df = load_data(FILE_PATH)
+
+min_dt = df["date_hour"].min()
+max_dt = df["date_hour"].max()
+
+# 3) Υπόλοιπα φίλτρα sidebar
+stops = (
+    sorted(df["dv_platenum_station"].dropna().unique())
+    if "dv_platenum_station" in df.columns
+    else []
+)
+agencies = (
+    sorted(df["dv_agency"].dropna().unique())
+    if "dv_agency" in df.columns
+    else []
+)
+
+# Κανένα default: ο χρήστης διαλέγει μόνος του
+sel_stops = st.sidebar.multiselect("Stop", stops, default=[])
+agency_options = [format_agency_option(a) for a in agencies]
+sel_agency_labels = st.sidebar.multiselect("Agency", agency_options, default=[])
+
+# map από label → code
+label_to_code = {format_agency_option(a): str(a) for a in agencies}
+sel_agencies_codes = [label_to_code[l] for l in sel_agency_labels]
+
+date_range = st.sidebar.date_input(
+    "Date range",
+    value=(min_dt.date(), max_dt.date()),
+    min_value=min_dt.date(),
+    max_value=max_dt.date(),
+    key="date_range",
+)
+
+hour_range = st.sidebar.slider("Hour range", 0, 23, (0, 23))
+
+only_weekend = st.sidebar.checkbox("Only weekend", value=False)
+only_weekdays = st.sidebar.checkbox("Only weekdays", value=False)
+
+if only_weekend and only_weekdays:
+    st.sidebar.warning(
+        "Both 'Only weekend' and 'Only weekdays' are selected. No day-type filter will be applied (All days)."
+    )
+
+# =========================
+# CHART COLOR CONTROLS (restricted)
+# =========================
+st.sidebar.divider()
+st.sidebar.subheader("Chart colors")
+
+COLOR_CHOICES_COMMON = {
+    "Stop": "dv_platenum_station",
+    "Hour": "hour",
+    "Day of week": "dow",
+}
+
+
+
+# Trend line: default = Hour
+colorby_ts_label = st.sidebar.selectbox(
+    "Trend line: color by",
+    options=["Stop", "Hour", "Day of week"],
+    index=1,  # Hour
+)
+colorby_ts_col = COLOR_CHOICES_COMMON[colorby_ts_label]
+
+# Top 5 bars: default = Stop
+colorby_top5_label = st.sidebar.selectbox(
+    "Top 5 bars: color by",
+    options=["Stop", "Hour", "Day of week"],
+    index=0,  # Stop
+)
+colorby_top5_col = COLOR_CHOICES_COMMON[colorby_top5_label]
+
+# Avg by hour: default = Stop
+colorby_hourly_label = st.sidebar.selectbox(
+    "Avg by hour: color by",
+    options=["Stop", "Day of week"],
+    index=0,  # Stop
+)
+colorby_hourly_col = {
+    "Stop": "dv_platenum_station",
+    "Day of week": "dow",
+}[colorby_hourly_label]
+
+# =========================
+# APPLY FILTERS
+# =========================
+f = df.copy()
+
+if sel_stops and "dv_platenum_station" in f.columns:
+    f = f[f["dv_platenum_station"].isin(sel_stops)]
+if sel_agencies_codes and "dv_agency" in f.columns:
+    f = f[f["dv_agency"].isin(sel_agencies_codes)]
+
+start_date, end_date = date_range
+f = f[(f["date_hour"].dt.date >= start_date) & (f["date_hour"].dt.date <= end_date)]
+f = f[(f["hour"] >= hour_range[0]) & (f["hour"] <= hour_range[1])]
+
+# Day-type filters
+if only_weekend and not only_weekdays:
+    f = f[f["is_weekend"]]
+elif only_weekdays and not only_weekend:
+    f = f[~f["is_weekend"]]
+
+if f.empty:
+    st.markdown(
+        """
+        <div class="card">
+            <div class="card-title">No data</div>
+            <div class="small-muted">The selected filters returned an empty dataset.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.stop()
+
+# =========================
+# HEADER
+# =========================
+now = datetime.now().strftime("%A, %b %d, %Y, %H:%M")
+st.markdown(
+    f"""
+<div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+    <div style="font-weight:900; letter-spacing:0.3px;">OASA METRO INSIGHT HUB</div>
+    <div class="small-muted">
+      SYSTEM STATUS: <span class="status-green">● Normal Operations</span> | {now}
+    </div>
+  </div>
+  <div class="small-muted" style="margin-top:8px;">
+    Data coverage: {min_dt:%Y-%m-%d %H:00} to {max_dt:%Y-%m-%d %H:00}
+  </div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+# =========================
+# KPIs
+# =========================
+total_val = int(f["dv_validations"].sum())
+active_hours = int(f["date_hour"].nunique())
+mean_validations_per_hour = (total_val / active_hours) if active_hours else 0
+active_stops = (
+    int(f["dv_platenum_station"].nunique())
+    if "dv_platenum_station" in f.columns
+    else 0
+)
+
+peak_row = (
+    f.groupby("date_hour", as_index=False)["dv_validations"].sum()
+    .sort_values("dv_validations", ascending=False)
+    .head(1)
+)
+peak_txt = "—"
+if not peak_row.empty:
+    peak_txt = (
+        f'{peak_row.iloc[0]["date_hour"]:%Y-%m-%d %H:00} '
+        f'({int(peak_row.iloc[0]["dv_validations"]):,})'
+    )
+
+# =========================
+# MAIN LAYOUT
+# =========================
+left, right = st.columns([2.25, 1.0], gap="large")
+
+gdf_lines, gdf_stops = load_network_geodata()
+
+# Σύνολο validations ανά στάση, βάση των τρεχόντων φίλτρων
+# Σύνολο validations ανά στάση, βάση των τρεχόντων φίλτρων
+agg = (
+    f.groupby("dv_platenum_station", as_index=False)["dv_validations"]
+    .sum()
+    .rename(columns={"dv_validations": "Validations"})
+)
+
+# --- Κανονικοποίηση ονομάτων στις δύο πλευρές ---
+
+# Ridership: μόνο upper/strip
+agg["name_norm"] = agg["dv_platenum_station"].astype(str).apply(normalize_name_one)
+
+# Shapefile: upper/strip + STATION_NAME_MAP
+gdf_stops["name_norm"] = normalize_station_name(gdf_stops[STATION_NAME_COL])
+
+# Merge με βάση name_norm
+gdf_stops_agg = gdf_stops.merge(
+    agg[["name_norm", "Validations"]],
+    on="name_norm",
+    how="left",
+)
+
+gdf_stops_agg["Validations"] = gdf_stops_agg["Validations"].fillna(0)
+
+# (lon/lat τα έχει ήδη από load_network_geodata)
+max_val = gdf_stops_agg["Validations"].max()
+if max_val > 0:
+    gdf_stops_agg["radius"] = 80 + 420 * gdf_stops_agg["Validations"] / max_val
+else:
+    gdf_stops_agg["radius"] = 80
+
+
+
+# -------- LEFT: "Network view" placeholder + Top stops
+# -------- LEFT: "Network view" χάρτης + Top stops
+with left:
+    st.markdown(
+        """
+        <div class="card">
+            <div class="card-title">Network View</div>
+            <div class="small-muted">
+                Spatial view of the metro / ISAP network. Circle size encodes total validations
+                for the current filters.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+    line_layer = pdk.Layer(
+    "GeoJsonLayer",
+    data=gdf_lines.__geo_interface__,
+    stroked=True,
+    filled=False,
+    get_line_color=[80, 180, 255],
+    get_line_width=8,
+    line_width_min_pixels=3,
+    pickable=False,
+)
+
+
+
+    # 2) Σταθμοί ως ScatterplotLayer
+    stop_layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=gdf_stops_agg,
+        get_position=["lon", "lat"],
+        get_radius="radius",
+        radius_min_pixels=2,
+        radius_max_pixels=40,
+        get_fill_color=[255, 140, 0, 160],
+        pickable=True,
+    )
+
+    # Κέντρο χάρτη ~ μέσος των σταθμών
+    center_lat = float(gdf_stops_agg["lat"].mean())
+    center_lon = float(gdf_stops_agg["lon"].mean())
+
+    view_state = pdk.ViewState(
+        latitude=center_lat,
+        longitude=center_lon,
+        zoom=11,   # ή 10–12 αν θέλεις πιο μέσα/έξω
+        pitch=0,   # κάθετη κάτοψη
+        bearing=0,
+    )
+
+
+    layers = [line_layer]  # πάντα δείχνουμε το δίκτυο
+
+    # ---- LINK FLOWS (μόνο στα επιθυμητά months και μόνο αν υπάρχει αρχείο) ----
+    flow_layer = None
+    if (month_label in LINK_FLOW_MONTHS) and (month_label in LINK_FLOW_FILES) and (LINK_FLOW_FILES[month_label].exists()):
+        df_flow = load_link_flows_excel(LINK_FLOW_FILES[month_label])
+
+        # (προαιρετικό) κράτα μόνο Metro/ISAP γραμμές: 1,2,3
+        df_flow = df_flow[df_flow["line"].isin([1, 2, 3])].copy() if "line" in df_flow.columns else df_flow
+
+        flow_records, missing_pairs = build_flow_records(df_flow, gdf_stops, offset_m=25.0)
+
+        if missing_pairs:
+            st.info(f"Link-flows: {len(missing_pairs)} links δεν αντιστοιχίστηκαν σε στάσεις του shapefile (έλεγχος ονομάτων).")
+
+        if flow_records:
+            flow_layer = pdk.Layer(
+                "PathLayer",
+                data=flow_records,
+                get_path="path",
+                get_color="color",
+                get_width="width",
+                width_min_pixels=2,
+                width_max_pixels=18,
+                pickable=True,
+            )
+            layers.append(flow_layer)
+
+    # Τέλος βάζουμε τους σταθμούς πάνω-πάνω
+    layers.append(stop_layer)
+
+    deck = pdk.Deck(
+       layers=layers,
+       initial_view_state=view_state,
+       map_style="mapbox://styles/mapbox/dark-v11",
+       tooltip={
+         "text": (
+             f"{{{STATION_NAME_COL}}}\n"
+             "Validations: {Validations}\n\n"
+             "Link: {from} → {to}\n"
+             "Dir: {direction}\n"
+             "Flow: {flow}"
+         )
+       },
+    )
+
+
+
+    st.markdown('<div class="card plot-card">', unsafe_allow_html=True)
+    st.pydeck_chart(deck)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Ακολουθεί όπως πριν το Top 12 Stops (το bar chart που ήδη έχεις)
+    # ...
+
+
+    topN_left = 12
+    top_left = (
+        f.groupby("dv_platenum_station", as_index=False)["dv_validations"].sum()
+        .sort_values("dv_validations", ascending=False)
+        .head(topN_left)
+        .rename(
+            columns={
+                "dv_platenum_station": "Stop",
+                "dv_validations": "Validations",
+            }
+        )
+    )
+
+    top_left = to_categorical_for_color(top_left, "Stop")
+
+    fig_left = px.bar(
+        top_left,
+        x="Validations",
+        y="Stop",
+        orientation="h",
+        title=f"Top {topN_left} Stops (current filters)",
+        color="Stop",
+        color_discrete_sequence=PALETTE6,
+        labels={"Validations": "Validations", "Stop": "Stop"},
+    )
+    fig_left.update_layout(showlegend=False)
+    fig_left = apply_dark_plotly(fig_left, height=520)
+    fig_left.update_xaxes(title_text="Validations")
+    fig_left.update_yaxes(title_text="Stop")
+
+    st.markdown('<div class="card plot-card">', unsafe_allow_html=True)
+    st.plotly_chart(fig_left, use_container_width=True, theme=None)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# -------- RIGHT: KPI + 2 charts stacked
+with right:
+    st.markdown(
+        f"""
+        <div class="card">
+            <div class="card-title">Key Metrics (Filtered)</div>
+            <div style="display:flex; gap:14px; justify-content:space-between;">
+                <div style="flex:1;">
+                    <div class="metric-label">Active Stops</div>
+                    <div class="big-number">{active_stops:,}</div>
+                </div>
+                <div style="flex:1;">
+                    <div class="metric-label">Mean validations/hour</div>
+                    <div class="big-number">{mean_validations_per_hour:,.1f}</div>
+                </div>
+                <div style="flex:1;">
+                    <div class="metric-label">Total Validations</div>
+                    <div class="big-number">{total_val/1000:,.1f}K</div>
+                </div>
+            </div>
+            <div class="small-muted" style="margin-top:10px;">Peak hour: {peak_txt}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ---- Trend (hourly sum)
+    f_ts = to_categorical_for_color(f, colorby_ts_col)
+    ts = (
+        f_ts.groupby(["date_hour", colorby_ts_col], as_index=False)[
+            "dv_validations"
+        ]
+        .sum()
+        .rename(columns={"dv_validations": "Validations"})
+    )
+
+    fig_ts = px.line(
+        ts,
+        x="date_hour",
+        y="Validations",
+        color=colorby_ts_col,
+        title=f"Ridership Trend (Hourly sum) — by {colorby_ts_label}",
+        color_discrete_sequence=PALETTE6,
+        labels={"date_hour": "Date-hour", "Validations": "Validations"},
+    )
+    fig_ts.update_layout(legend_title_text=colorby_ts_label)
+    fig_ts = apply_dark_plotly(fig_ts, height=260)
+    fig_ts.update_xaxes(title_text="Date-hour")
+    fig_ts.update_yaxes(title_text="Validations")
+
+    st.markdown('<div class="card plot-card">', unsafe_allow_html=True)
+    st.plotly_chart(fig_ts, use_container_width=True, theme=None)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ---- Top 5 bars (sum)
+    top5_base = (
+        f.groupby("dv_platenum_station", as_index=False)["dv_validations"].sum()
+        .sort_values("dv_validations", ascending=False)
+        .head(5)
+        .rename(
+            columns={
+                "dv_platenum_station": "Stop",
+                "dv_validations": "Validations",
+            }
+        )
+    )
+    top5_stops = set(top5_base["Stop"].tolist())
+    ff = f[f["dv_platenum_station"].isin(top5_stops)].copy()
+
+    if colorby_top5_col == "dv_platenum_station":
+        top5 = to_categorical_for_color(top5_base, "Stop")
+        fig_top5 = px.bar(
+            top5,
+            x="Stop",
+            y="Validations",
+            title="Top 5 Stops (sum) — by Stop",
+            color="Stop",
+            color_discrete_sequence=PALETTE6,
+            labels={"Stop": "Stop", "Validations": "Validations"},
+        )
+        fig_top5.update_layout(showlegend=False)
+        fig_top5.update_xaxes(title_text="Stop")
+    else:
+        ff = to_categorical_for_color(ff, colorby_top5_col)
+        top5 = (
+            ff.groupby(colorby_top5_col, as_index=False)["dv_validations"].sum()
+            .sort_values("dv_validations", ascending=False)
+            .rename(columns={"dv_validations": "Validations"})
+        )
+        fig_top5 = px.bar(
+            top5,
+            x=colorby_top5_col,
+            y="Validations",
+            title=f"Top 5 Stops (sum) — aggregated by {colorby_top5_label}",
+            color=colorby_top5_col,
+            color_discrete_sequence=PALETTE6,
+            labels={"Validations": "Validations"},
+        )
+        fig_top5.update_layout(showlegend=False)
+        fig_top5.update_xaxes(title_text=colorby_top5_label)
+
+    fig_top5 = apply_dark_plotly(fig_top5, height=260)
+    fig_top5.update_yaxes(title_text="Validations")
+
+    st.markdown('<div class="card plot-card">', unsafe_allow_html=True)
+    st.plotly_chart(fig_top5, use_container_width=True, theme=None)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# =========================
+# BOTTOM ROW: Avg by hour + Heatmap
+# =========================
+st.markdown(
+    '<div class="card"><div class="card-title">Additional Analytics</div></div>',
+    unsafe_allow_html=True,
+)
+
+b1, b2 = st.columns([1, 1], gap="large")
+
+with b1:
+    fh = to_categorical_for_color(f, colorby_hourly_col)
+    hp = (
+        fh.groupby(["hour", colorby_hourly_col], as_index=False)[
+            "dv_validations"
+        ]
+        .mean()
+        .rename(columns={"dv_validations": "Mean validations"})
+    )
+
+    fig_hp = px.bar(
+        hp,
+        x="hour",
+        y="Mean validations",
+        color=colorby_hourly_col,
+        barmode="group",
+        title=f"Average by Hour (mean) — by {colorby_hourly_label}",
+        color_discrete_sequence=PALETTE6,
+        labels={"hour": "Hour", "Mean validations": "Mean validations"},
+    )
+    fig_hp.update_layout(legend_title_text=colorby_hourly_label)
+    fig_hp = apply_dark_plotly(fig_hp, height=330)
+    fig_hp.update_xaxes(title_text="Hour")
+    fig_hp.update_yaxes(title_text="Mean validations")
+
+    st.markdown('<div class="card plot-card">', unsafe_allow_html=True)
+    st.plotly_chart(fig_hp, use_container_width=True, theme=None)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with b2:
+    hm = (
+        f.groupby(["date", "hour"], as_index=False)["dv_validations"].sum()
+        .pivot(index="date", columns="hour", values="dv_validations")
+        .fillna(0)
+        .sort_index()
+    )
+    fig_hm = px.imshow(
+        hm,
+        aspect="auto",
+        title="Heatmap (day × hour) — sum of validations",
+        labels={"x": "Hour", "y": "Date", "color": "Validations"},
+    )
+    fig_hm = apply_dark_plotly(fig_hm, height=330)
+    fig_hm.update_xaxes(title_text="Hour")
+    fig_hm.update_yaxes(title_text="Date")
+
+    st.markdown('<div class="card plot-card">', unsafe_allow_html=True)
+    st.plotly_chart(fig_hm, use_container_width=True, theme=None)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.caption(
+        "Heatmap interpretation: each cell represents the **sum of validations** for a specific **day (row)** "
+        "and **hour (column)**, after applying the filters."
+    )
+
+# =========================
+# EXPORT + DATA QUALITY
+# =========================
+exp1, exp2 = st.columns([1, 1], gap="large")
+
+with exp2:
+    all_days = pd.date_range(min_dt.date(), max_dt.date(), freq="D").date
+    present_days = set(df["date_hour"].dt.date.unique())
+    missing_days = [d for d in all_days if d not in present_days]
+
+    if missing_days:
+        st.markdown(
+            f"""
+            <div class="card">
+              <div class="card-title">Data Quality</div>
+              <div class="small-muted">Missing days detected:</div>
+              <div style="margin-top:6px;">{", ".join([d.isoformat() for d in missing_days])}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            """
+            <div class="card">
+              <div class="card-title">Data Quality</div>
+              <div class="small-muted">No missing days detected in the period.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )

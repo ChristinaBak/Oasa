@@ -14,11 +14,28 @@ from pathlib import Path
 from typing import Union
 import geopandas as gpd
 import pydeck as pdk
+import re
+import unicodedata
 
+LINK_FLOW_MONTHS = {
+    "Ιανουάριος 2024",
+    "Απρίλιος 2024",
+    "Αύγουστος 2024",
+    "Οκτώβριος 2024",
+    "Δεκέμβριος 2024",
+}
 
 BASE_DIR = Path(__file__).parent
-LINES_SHP = BASE_DIR / "data" / "Splitted_Metro_Lines_2100.shp"
+LINES_SHP = BASE_DIR / "data" / "PT_Lines_Urban_FixedRoute.shp"
 STOPS_SHP = BASE_DIR / "data" / "PT_Stops_2100.shp"
+
+LINK_FLOW_FILES = {
+    "Απρίλιος 2024": BASE_DIR / "data" / "LINK_FLOWS_EASTER.xlsx",
+    "Ιανουάριος 2024": BASE_DIR / "data" / "LINK_FLOWS_typical_01.xlsx",
+    "Αύγουστος 2024": BASE_DIR / "data" / "LINK_FLOWS_SUMMER.xlsx",
+    "Οκτώβριος 2024": BASE_DIR / "data" / "LINK_FLOWS_typical_10.xlsx",
+    "Δεκέμβριος 2024": BASE_DIR / "data" / "LINK_FLOWS_XMAS.xlsx",
+} 
 
 
 # =========================
@@ -160,6 +177,58 @@ section[data-testid="stSidebar"] * { color: #e5e7eb; }
 # =========================
 # HELPERS
 # =========================
+
+LATIN_TO_GREEK = str.maketrans({
+    "A": "Α", "B": "Β", "E": "Ε", "H": "Η", "I": "Ι",
+    "K": "Κ", "M": "Μ", "N": "Ν", "O": "Ο", "P": "Ρ",
+    "T": "Τ", "Y": "Υ", "X": "Χ",
+})
+
+def canonical_station(x: str) -> str:
+    s = str(x).strip().upper()
+    s = strip_accents(s)
+    s = s.translate(LATIN_TO_GREEK)
+
+    # ενοποίηση στίξης/παύλων
+    s = re.sub(r"[.\-–—/]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+
+    # επέκταση κοινών συντομογραφιών
+    s = re.sub(r"\bΣΤ\b", "ΣΤΑΘΜΟΣ", s)
+    s = re.sub(r"\bΔΟΥΚ\b", "ΔΟΥΚΙΣΣΗΣ", s)
+
+    # manual map στο τέλος
+    return STATION_NAME_MAP.get(s, s)
+
+def canonical_flow_station(x: str) -> str:
+    base = re.sub(r"_L\d+$", "", str(x).strip(), flags=re.IGNORECASE)
+    return canonical_station(base)
+
+
+def strip_accents(text: str) -> str:
+    text = str(text)
+    return "".join(
+        c for c in unicodedata.normalize("NFD", text)
+        if unicodedata.category(c) != "Mn"
+    )
+
+def normalize_name_one(x: str) -> str:
+    s = str(x).strip().upper()
+    s = strip_accents(s)
+    s = re.sub(r"\s+", " ", s)
+    # εφαρμογή mapping που ήδη έχεις
+    s = STATION_NAME_MAP.get(s, s)
+    return s
+
+def normalize_station_name(s: pd.Series) -> pd.Series:
+    return s.astype(str).apply(normalize_name_one)
+
+def normalize_flow_station(x: str) -> str:
+    # κόβουμε suffix τύπου _L1, _L2, ...
+    base = re.sub(r"_L\d+$", "", str(x).strip(), flags=re.IGNORECASE)
+    return normalize_name_one(base)
+
+
 def apply_dark_plotly(fig, height=None):
     """Force plotly into real dark mode (transparent backgrounds for cards)."""
     fig.update_layout(
@@ -197,15 +266,7 @@ def to_categorical_for_color(df: pd.DataFrame, col: str) -> pd.DataFrame:
         d[col] = d[col].astype(str)
     return d
 
-def normalize_station_name(s: pd.Series) -> pd.Series:
-    """Κανονικοποίηση ονόματος σταθμού για join μεταξύ ridership & shapefile."""
-    # string, strip, uppercase
-    s_norm = s.astype(str).str.strip().str.upper()
 
-    # εφαρμογή χειροκίνητου mapping στο shapefile
-    s_norm = s_norm.replace(STATION_NAME_MAP)
-
-    return s_norm
 
 
 @st.cache_data(show_spinner=False)
@@ -272,26 +333,131 @@ def load_network_geodata():
     # 1. Διαβάζουμε τις γραμμές στο αρχικό τους SRS (EPSG:2100, μέτρα)
     gdf_lines = gpd.read_file(LINES_SHP)
 
-    # Υπολογίζουμε μήκος σε μέτρα στο EPSG:2100
-    gdf_lines["length_m"] = gdf_lines.geometry.length
 
-    # Κρατάμε ΜΟΝΟ πραγματικά τμήματα γραμμής,
-    # πετάμε τα μικρά βελάκια (π.χ. ό,τι είναι < 300 m).
-    # Αν δεις ότι κόβονται και κανονικές γραμμές, χαμήλωσε το όριο.
-    gdf_lines = gdf_lines[gdf_lines["length_m"] > 300]
+    # Αν το shapefile έχει δηλωμένο CRS, το φέρνουμε σε WGS84.
+    # ΔΕΝ βάζουμε πλέον αυθαίρετα EPSG:2100.
+    if gdf_lines.crs is not None and gdf_lines.crs.to_epsg() != 4326:
+        gdf_lines = gdf_lines.to_crs("EPSG:4326")
 
-    # Μετατροπή σε WGS84 για pydeck
-    gdf_lines = gdf_lines.to_crs("EPSG:4326")
+    # Αν δεν έχει CRS (crs=None), θεωρούμε ότι είναι ήδη σε WGS84
+    # και δεν το πειράζουμε (αλλιώς θα το χαλάσουμε).
 
-    # 2. Διαβάζουμε τα stops και τα φέρνουμε σε WGS84
-    gdf_stops = gpd.read_file(STOPS_SHP).to_crs("EPSG:4326")
+    # ----- STOPS -----
+    gdf_stops = gpd.read_file(STOPS_SHP)
+    if gdf_stops.crs is not None and gdf_stops.crs.to_epsg() != 4326:
+        gdf_stops = gdf_stops.to_crs("EPSG:4326")
 
-    # Προσθέτουμε συντεταγμένες σημείων
     gdf_stops["lon"] = gdf_stops.geometry.x
     gdf_stops["lat"] = gdf_stops.geometry.y
 
     return gdf_lines, gdf_stops
 
+@st.cache_data(show_spinner=False)
+def load_link_flows_excel(xlsx_path: Union[str, Path]) -> pd.DataFrame:
+    xls = pd.ExcelFile(xlsx_path)
+    frames = []
+    for sh in xls.sheet_names:
+        tmp = pd.read_excel(xlsx_path, sheet_name=sh)
+        tmp.columns = tmp.columns.astype(str).str.strip()
+        tmp["sheet"] = sh
+        # ασφάλεια τύπων
+        for c in ["flow_forward", "flow_reverse"]:
+            if c in tmp.columns:
+                tmp[c] = pd.to_numeric(tmp[c], errors="coerce").fillna(0)
+        frames.append(tmp)
+    return pd.concat(frames, ignore_index=True)
+
+def offset_path(lon1, lat1, lon2, lat2, offset_m: float) -> list:
+   
+    import math
+
+    lat0 = (lat1 + lat2) / 2.0
+    m_per_deg_lat = 111320.0
+    m_per_deg_lon = 111320.0 * math.cos(math.radians(lat0))
+
+    # σε "μέτρα"
+    x1, y1 = lon1 * m_per_deg_lon, lat1 * m_per_deg_lat
+    x2, y2 = lon2 * m_per_deg_lon, lat2 * m_per_deg_lat
+    vx, vy = (x2 - x1), (y2 - y1)
+    norm = (vx * vx + vy * vy) ** 0.5
+    if norm == 0:
+        return [[lon1, lat1], [lon2, lat2]]
+
+    # κάθετο unit vector
+    nx, ny = (-vy / norm), (vx / norm)
+
+    # offset σε degrees
+    dlon = (nx * offset_m) / m_per_deg_lon
+    dlat = (ny * offset_m) / m_per_deg_lat
+
+    return [[lon1 + dlon, lat1 + dlat], [lon2 + dlon, lat2 + dlat]]
+
+def build_flow_records(df_flow: pd.DataFrame, gdf_stops: gpd.GeoDataFrame, offset_m: float = 25.0):
+    # lookup από name_norm -> (lon,lat)
+    lookup = {}
+    for _, r in gdf_stops.iterrows():
+        lookup[str(r["name_norm"])] = (float(r["lon"]), float(r["lat"]))
+
+    max_flow = float(
+        max(
+            df_flow["flow_forward"].max() if "flow_forward" in df_flow.columns else 0,
+            df_flow["flow_reverse"].max() if "flow_reverse" in df_flow.columns else 0,
+        )
+    ) or 1.0
+
+    records = []
+    missing = set()
+
+    for _, row in df_flow.iterrows():
+        fr_raw = row.get("from", "")
+        to_raw = row.get("to", "")
+
+        #fr_norm = normalize_flow_station(fr_raw)
+        #to_norm = normalize_flow_station(to_raw)
+        
+        fr_norm = canonical_flow_station(fr_raw)
+        to_norm = canonical_flow_station(to_raw)
+
+
+        if fr_norm not in lookup or to_norm not in lookup:
+            missing.add((str(fr_raw), str(to_raw)))
+            continue
+
+        lon1, lat1 = lookup[fr_norm]
+        lon2, lat2 = lookup[to_norm]
+
+        flow_f = float(row.get("flow_forward", 0))
+        flow_r = float(row.get("flow_reverse", 0))
+
+        # widths (2..12 περίπου)
+        w_f = 2 + 10 * (flow_f / max_flow)
+        w_r = 2 + 10 * (flow_r / max_flow)
+
+        # forward (A->B) με +offset
+        records.append({
+            "line": int(row.get("line", 0)) if str(row.get("line", "")).isdigit() else str(row.get("sheet", "")),
+            "from": re.sub(r"_L\d+$", "", str(fr_raw)),
+            "to": re.sub(r"_L\d+$", "", str(to_raw)),
+            "direction": "forward",
+            "flow": flow_f,
+            "width": w_f,
+            "color": [255, 90, 90, 190],  # κόκκινο
+            "path": offset_path(lon1, lat1, lon2, lat2, +offset_m),
+        })
+
+        # reverse (B->A) με -offset (ώστε να φαίνεται δίπλα)
+        records.append({
+            "line": int(row.get("line", 0)) if str(row.get("line", "")).isdigit() else str(row.get("sheet", "")),
+            "from": re.sub(r"_L\d+$", "", str(to_raw)),
+            "to": re.sub(r"_L\d+$", "", str(fr_raw)),
+            "direction": "reverse",
+            "flow": flow_r,
+            "width": w_r,
+            "color": [90, 255, 90, 190],   # πράσινο
+            "path": offset_path(lon1, lat1, lon2, lat2, -offset_m)[::-1],
+        })
+
+    return records, missing
 
 
 
@@ -365,13 +531,7 @@ COLOR_CHOICES_COMMON = {
     "Day of week": "dow",
 }
 
-# Left panel: keep Stop
-st.sidebar.selectbox(
-    "Left panel (map placeholder): color by",
-    options=["Stop"],
-    index=0,
-)
-colorby_left_col = "dv_platenum_station"
+
 
 # Trend line: default = Hour
 colorby_ts_label = st.sidebar.selectbox(
@@ -495,10 +655,14 @@ agg = (
 # --- Κανονικοποίηση ονομάτων στις δύο πλευρές ---
 
 # Ridership: μόνο upper/strip
-agg["name_norm"] = agg["dv_platenum_station"].astype(str).str.strip().str.upper()
+#agg["name_norm"] = agg["dv_platenum_station"].astype(str).apply(normalize_name_one)
+agg["name_norm"] = agg["dv_platenum_station"].astype(str).apply(canonical_station)
+
 
 # Shapefile: upper/strip + STATION_NAME_MAP
-gdf_stops["name_norm"] = normalize_station_name(gdf_stops[STATION_NAME_COL])
+#gdf_stops["name_norm"] = normalize_station_name(gdf_stops[STATION_NAME_COL])
+gdf_stops["name_norm"] = gdf_stops[STATION_NAME_COL].astype(str).apply(canonical_station)
+
 
 # Merge με βάση name_norm
 gdf_stops_agg = gdf_stops.merge(
@@ -541,7 +705,8 @@ with left:
     stroked=True,
     filled=False,
     get_line_color=[80, 180, 255],
-    get_line_width=3,
+    get_line_width=8,
+    line_width_min_pixels=3,
     pickable=False,
 )
 
@@ -572,14 +737,52 @@ with left:
     )
 
 
+    layers = [line_layer]  # πάντα δείχνουμε το δίκτυο
+
+    # ---- LINK FLOWS (μόνο στα επιθυμητά months και μόνο αν υπάρχει αρχείο) ----
+    flow_layer = None
+    if (month_label in LINK_FLOW_MONTHS) and (month_label in LINK_FLOW_FILES) and (LINK_FLOW_FILES[month_label].exists()):
+        df_flow = load_link_flows_excel(LINK_FLOW_FILES[month_label])
+
+        # (προαιρετικό) κράτα μόνο Metro/ISAP γραμμές: 1,2,3
+        df_flow = df_flow[df_flow["line"].isin([1, 2, 3])].copy() if "line" in df_flow.columns else df_flow
+
+        flow_records, missing_pairs = build_flow_records(df_flow, gdf_stops, offset_m=25.0)
+
+        if missing_pairs:
+            st.info(f"Link-flows: {len(missing_pairs)} links δεν αντιστοιχίστηκαν σε στάσεις του shapefile (έλεγχος ονομάτων).")
+
+        if flow_records:
+            flow_layer = pdk.Layer(
+                "PathLayer",
+                data=flow_records,
+                get_path="path",
+                get_color="color",
+                get_width="width",
+                width_min_pixels=2,
+                width_max_pixels=18,
+                pickable=True,
+            )
+            layers.append(flow_layer)
+
+    # Τέλος βάζουμε τους σταθμούς πάνω-πάνω
+    layers.append(stop_layer)
+
     deck = pdk.Deck(
-       layers=[line_layer, stop_layer],
+       layers=layers,
        initial_view_state=view_state,
-       map_style=None,
+       map_style="mapbox://styles/mapbox/dark-v11",
        tooltip={
-         "text": f"{{{STATION_NAME_COL}}}\nValidations: {{Validations}}"
+         "text": (
+             f"{{{STATION_NAME_COL}}}\n"
+             "Validations: {Validations}\n\n"
+             "Link: {from} → {to}\n"
+             "Dir: {direction}\n"
+             "Flow: {flow}"
+         )
        },
     )
+
 
 
     st.markdown('<div class="card plot-card">', unsafe_allow_html=True)
@@ -828,18 +1031,6 @@ with exp2:
             """,
             unsafe_allow_html=True,
         )
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
