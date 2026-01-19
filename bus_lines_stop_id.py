@@ -448,23 +448,26 @@ with st.sidebar.expander("Debug: SHP stop_id format", expanded=False):
 min_dt = df["date_hour"].min()
 max_dt = df["date_hour"].max()
 
-# =========================
+
 # SIDEBAR FILTERS
 # =========================
 st.sidebar.header("Filters")
 
+# --- Options for multiselects ---
 all_stops = sorted(df["STOP_DESCR"].dropna().unique().tolist())
 all_lines = sorted(df["line_route"].dropna().unique().tolist())
 
+# Use date_hour (already computed) to build the available day list
+all_dates = sorted(pd.to_datetime(df["date_hour"]).dt.date.unique().tolist())
+
+# --- Widgets ---
 sel_stops = st.sidebar.multiselect("Stop (STOP_DESCR)", all_stops, default=[])
 sel_lines = st.sidebar.multiselect("Line (LINE_ROUTE)", all_lines, default=[])
 
-date_range = st.sidebar.date_input(
-    "Date range",
-    value=(min_dt.date(), max_dt.date()),
-    min_value=min_dt.date(),
-    max_value=max_dt.date(),
-    key="date_range",
+sel_dates = st.sidebar.multiselect(
+    "Select day(s)",
+    options=all_dates,
+    default=all_dates,  # start with all selected
 )
 
 hour_range = st.sidebar.slider("Hour range", 0, 23, (0, 23))
@@ -510,15 +513,23 @@ colorby_hourly_col = COLOR_CHOICES[colorby_hourly_label]
 # =========================
 f = df.copy()
 
+# --- Stop / Line filters ---
 if sel_stops:
     f = f[f["STOP_DESCR"].isin(sel_stops)]
 if sel_lines:
     f = f[f["line_route"].isin(sel_lines)]
 
-start_date, end_date = date_range
-f = f[(f["date_hour"].dt.date >= start_date) & (f["date_hour"].dt.date <= end_date)]
+# --- Specific-day filter (multiselect days) ---
+if sel_dates:
+    f = f[f["date_hour"].dt.date.isin(sel_dates)]
+else:
+    # If user deselects everything -> empty dataset
+    f = f.iloc[0:0]
+    
+# --- Hour filter ---
 f = f[(f["hour"] >= hour_range[0]) & (f["hour"] <= hour_range[1])]
 
+# --- Weekend / Weekday filter ---
 if only_weekend and not only_weekdays:
     f = f[f["is_weekend"]]
 elif only_weekdays and not only_weekend:
@@ -539,14 +550,23 @@ if f.empty:
 
 # =========================
 # MEMBERSHIP SET FOR MAP
-# IMPORTANT: membership ignores hour/date/weekend filters
-# - If line selected: show all stops that appear for that line during full month
-# - Validations still come from f (filtered), so can be 0 and still visible
+# IMPORTANT: membership ignores hour/weekend filters,
+# but WILL respect selected days (sel_dates) + selected lines/stops.
 # =========================
-if sel_lines:
-    base_for_membership = df[df["line_route"].isin(sel_lines)]
+
+base_for_membership = df.copy()
+
+# Apply selected days to membership (so map changes when user picks days)
+if sel_dates:
+    base_for_membership = base_for_membership[
+        base_for_membership["date_hour"].dt.date.isin(sel_dates)
+    ]
 else:
-    base_for_membership = df
+    base_for_membership = base_for_membership.iloc[0:0]  # none selected
+
+# If line selected: keep only those lines
+if sel_lines:
+    base_for_membership = base_for_membership[base_for_membership["line_route"].isin(sel_lines)]
 
 # If user also selected specific stops, constrain membership accordingly
 if sel_stops:
@@ -737,7 +757,7 @@ with left:
     deck = pdk.Deck(
         layers=[line_layer, stop_layer],
         initial_view_state=view_state,
-        map_style="mapbox://styles/mapbox/dark-v11",
+        map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
         tooltip={"text": f"{{{STOPS_NAME_COL}}}\nSTOP_ID: {{{STOPS_ID_COL}}}\nValidations: {{Validations}}"},
     )
 
