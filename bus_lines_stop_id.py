@@ -426,11 +426,17 @@ with st.sidebar.expander("Debug: STOP_ID matching", expanded=False):
     st.write(f"Excel IDs NOT in SHP: {len(excel_ids - shp_ids):,}")
     st.write(f"SHP IDs NOT in Excel: {len(shp_ids - excel_ids):,}")
 
-    # Show a small sample of unmatched Excel IDs
+    # --- NEW: check if unmatched would match with zfill(6)
+    unmatched = list(excel_ids - shp_ids)
+    unmatched_z6 = {str(x).zfill(6) for x in unmatched}
+    st.write("Unmatched that would match after zfill(6):", len(unmatched_z6 & shp_ids))
+    # ------------------------------------------------------
+
     sample_unmatched = sorted(list(excel_ids - shp_ids))[:30]
     if sample_unmatched:
         st.write("Sample Excel STOP_ID not found in shapefile:")
         st.code(", ".join(sample_unmatched))
+
 
 with st.sidebar.expander("Debug: SHP stop_id format", expanded=False):
     shp_raw = gdf_stops[STOPS_ID_COL].astype(str).str.strip()
@@ -854,7 +860,7 @@ with right:
     st.plotly_chart(fig_ts, use_container_width=True, theme=None)
     st.markdown("</div>", unsafe_allow_html=True)
 
-
+Debug
 # =========================
 # BOTTOM ROW: AVG BY HOUR + HEATMAP
 # =========================
